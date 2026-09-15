@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_file
 from openai import OpenAI
 from PIL import Image
+from collections import deque
 
 load_dotenv()
 
@@ -180,6 +181,135 @@ def save_cutout_png(source_bytes: bytes) -> str:
     return f"/static/uploads/{filename}"
 
 
+
+
+def color_distance(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+
+
+def save_quick_cutout_png(source_bytes: bytes) -> str:
+    """Lightweight background removal optimized for e-commerce images on plain/light backgrounds."""
+    try:
+        with Image.open(io.BytesIO(source_bytes)) as im:
+            im = im.convert('RGBA')
+
+            max_side = 1200
+            if max(im.size) > max_side:
+                im.thumbnail((max_side, max_side))
+
+            width, height = im.size
+            pixels = im.load()
+
+            # Estimate the background color from the four corners.
+            corners = [
+                pixels[0, 0],
+                pixels[max(0, width - 1), 0],
+                pixels[0, max(0, height - 1)],
+                pixels[max(0, width - 1), max(0, height - 1)],
+            ]
+            bg = tuple(int(sum(c[i] for c in corners) / len(corners)) for i in range(3))
+
+            visited = [[False] * height for _ in range(width)]
+            queue = deque()
+
+            def try_add(x, y):
+                if 0 <= x < width and 0 <= y < height and not visited[x][y]:
+                    r, g, b, a = pixels[x, y]
+                    # Background-like if close to corner average or very bright neutral.
+                    near_bg = color_distance((r, g, b), bg) <= 90
+                    bright_neutral = (r >= 232 and g >= 232 and b >= 232 and max(r, g, b) - min(r, g, b) <= 34)
+                    if a > 0 and (near_bg or bright_neutral):
+                        visited[x][y] = True
+                        queue.append((x, y))
+
+            for x in range(width):
+                try_add(x, 0)
+                try_add(x, height - 1)
+            for y in range(height):
+                try_add(0, y)
+                try_add(width - 1, y)
+
+            transparent_count = 0
+            while queue:
+                x, y = queue.popleft()
+                r, g, b, a = pixels[x, y]
+                pixels[x, y] = (r, g, b, 0)
+                transparent_count += 1
+
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < width and 0 <= ny < height and not visited[nx][ny]:
+                        nr, ng, nb, na = pixels[nx, ny]
+                        near_bg = color_distance((nr, ng, nb), bg) <= 90
+                        bright_neutral = (nr >= 232 and ng >= 232 and nb >= 232 and max(nr, ng, nb) - min(nr, ng, nb) <= 34)
+                        if na > 0 and (near_bg or bright_neutral):
+                            visited[nx][ny] = True
+                            queue.append((nx, ny))
+
+            # If almost nothing was removed, do a soft second pass for near-white pixels.
+            if transparent_count / max(1, (width * height)) < 0.03:
+                transparent_count = 0
+                for x in range(width):
+                    for y in range(height):
+                        r, g, b, a = pixels[x, y]
+                        if a == 0:
+                            continue
+                        bright_neutral = (r >= 242 and g >= 242 and b >= 242 and max(r, g, b) - min(r, g, b) <= 18)
+                        if bright_neutral:
+                            pixels[x, y] = (r, g, b, 0)
+                            transparent_count += 1
+
+            if transparent_count == 0:
+                raise RuntimeError(
+                    'Quick cutout could not detect a removable plain background. '
+                    'Use a cleaner product image or upload a product image with a light background.'
+                )
+
+            bbox = im.getbbox()
+            if bbox:
+                im = im.crop(bbox)
+
+            output_buffer = io.BytesIO()
+            im.save(output_buffer, format='PNG')
+            verified_bytes = output_buffer.getvalue()
+
+    except RuntimeError:
+        raise
+    except Exception as error:
+        raise RuntimeError(f'Quick cutout failed: {error}') from error
+
+    filename = f'cutout-{uuid4().hex}.png'
+    destination = UPLOAD_DIR / filename
+    destination.write_bytes(verified_bytes)
+    return f'/static/uploads/{filename}'
+
+
+def save_best_cutout_png(source_bytes: bytes, prefer_ai: bool = False):
+    """Use lightweight quick cutout first for better UX and cheaper deployment.
+    Fall back to rembg only when explicitly preferred and available.
+    """
+    errors = []
+
+    if prefer_ai and REMBG_AVAILABLE:
+        try:
+            return save_cutout_png(source_bytes), 'ai'
+        except Exception as error:
+            errors.append(str(error))
+
+    try:
+        return save_quick_cutout_png(source_bytes), 'quick'
+    except Exception as error:
+        errors.append(str(error))
+
+    if REMBG_AVAILABLE:
+        try:
+            return save_cutout_png(source_bytes), 'ai'
+        except Exception as error:
+            errors.append(str(error))
+
+    detail = ' | '.join(dict.fromkeys(errors)) or 'No cutout method succeeded.'
+    raise RuntimeError(detail)
+
+
 # =========================
 # Product metadata
 # =========================
@@ -311,39 +441,29 @@ def product_api():
 @app.post("/api/auto-cutout")
 def auto_cutout_api():
     """Create a transparent PNG from either an uploaded image or a public image URL."""
-    if not REMBG_AVAILABLE:
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "message": (
-                        "Automatic cutout is unavailable. "
-                        "Use Python 3.11-3.13, run: pip install \"rembg[cpu]\", "
-                        "then restart Flask."
-                    ),
-                    "detail": REMBG_IMPORT_ERROR,
-                    "python_version": sys.version.split()[0],
-                }
-            ),
-            501,
-        )
-
     try:
         if "image" in request.files:
             image_file = request.files["image"]
             source_bytes = image_file.read()
             if not source_bytes:
                 return jsonify({"ok": False, "message": "The uploaded image is empty."}), 400
+            prefer_ai = str(request.form.get("prefer_ai", "false")).lower() == "true"
         else:
             payload = request.get_json(silent=True) or {}
             image_url = str(payload.get("image_url", "")).strip()
             referer = str(payload.get("referer", "")).strip()
+            prefer_ai = bool(payload.get("prefer_ai", False))
             if not image_url:
                 return jsonify({"ok": False, "message": "An image or image URL is required."}), 400
             source_bytes = download_public_image(image_url, referer=referer)
 
-        cutout_url = save_cutout_png(source_bytes)
-        return jsonify({"ok": True, "cutout_url": cutout_url})
+        cutout_url, cutout_mode = save_best_cutout_png(source_bytes, prefer_ai=prefer_ai)
+        return jsonify({
+            "ok": True,
+            "cutout_url": cutout_url,
+            "cutout_mode": cutout_mode,
+            "rembg_available": REMBG_AVAILABLE,
+        })
 
     except (requests.RequestException, ValueError, RuntimeError) as error:
         return jsonify({"ok": False, "message": str(error)}), 400
@@ -511,6 +631,7 @@ def health():
     return jsonify(
         {
             "ok": True,
+            "quick_cutout_available": True,
             "rembg_available": REMBG_AVAILABLE,
             "rembg_error": REMBG_IMPORT_ERROR,
             "python_version": sys.version.split()[0],

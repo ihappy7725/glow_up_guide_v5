@@ -28,6 +28,9 @@
 <section class="section hero-section" id="home">
 <div class="sky-orb orb-one"></div>
 <div class="sky-orb orb-two"></div>
+<div class="hero-cloud cloud-one" aria-hidden="true"></div>
+<div class="hero-cloud cloud-two" aria-hidden="true"></div>
+<div class="hero-cloud cloud-three" aria-hidden="true"></div>
 <div class="finder-shell reveal-up">
 <div class="finder-topbar">
 <div aria-hidden="true" class="traffic-lights">
@@ -51,14 +54,16 @@
 <span>today's memo</span>
 <p>dress for the version of you that's already outside.</p>
 </div>
+<div class="pink-sticker">pink mood on</div>
 </div>
 <div class="hero-copy reveal-up">
 <p class="eyebrow">YOUR DIGITAL FASHION UNIVERSE</p>
 <h1>glow up <em>guide</em></h1>
 <p class="hero-description">
-              Gather your finds. Build the look. Ask your AI stylist.
-              No fitting room required.
+              Gather your finds. Build the look. Save clothes with one-click quick cutout.
+              Ask your AI stylist. No fitting room required.
             </p>
+<div class="hero-accent-note">soft sky, cloud mood, and a little pink point.</div>
 <div class="hero-actions">
 <button class="primary-button" data-scroll="#style-lab">start styling</button>
 <button class="ghost-button" data-scroll="#explore">browse stores</button>
@@ -158,10 +163,10 @@
 <div class="section-heading reveal-left">
 <p class="eyebrow dark">STEP 02 / GATHER THE PIECES</p>
 <h2>curate the <em>aura</em></h2>
-<p>Paste a product page, check the details, and save it once. The background is removed automatically so the cutout is ready for Style Lab.</p>
+<p>Paste a product page, check the details, and save it once. A lighter quick-cutout method now runs automatically first, so adding clothes is much less annoying.</p>
 </div>
 <div class="import-panel reveal-right">
-<div class="auto-cutout-badge"><span>✂</span><div><strong>AUTO CUTOUT</strong><small>background removal runs when you save</small></div></div>
+<div class="auto-cutout-badge"><span>✂</span><div><strong>QUICK CUTOUT</strong><small>lightweight background removal runs when you save</small></div></div>
 <label for="productUrl">product detail URL</label>
 <div class="url-row">
 <input autocomplete="off" id="productUrl" placeholder="https://..." type="url"/>
@@ -199,7 +204,7 @@
 </select>
 </div>
 <div class="manual-form-actions">
-<button class="primary-button compact" id="saveProductButton" type="submit">save + cutout</button>
+<button class="primary-button compact" id="saveProductButton" type="submit">save ready item</button>
 <button class="text-button" id="cancelManualButton" type="button">cancel</button>
 </div>
 </form>
