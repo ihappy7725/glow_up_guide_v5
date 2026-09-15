@@ -1,0 +1,2 @@
+Place your own Slabo13px-Regular.ttf in this folder:
+static/fonts/Slabo13px-Regular.ttf
